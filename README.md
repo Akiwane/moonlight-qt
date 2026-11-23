@@ -1,5 +1,7 @@
 # Moonlight PC
 
+**JAHDesk fork.** Akiwane modified Moonlight Qt on 2026-11-23 to add in-window streaming controls on macOS and Windows and a visible local cursor option for absolute mouse mode. This fork is distributed under GNU GPL version 3 or later. The modified distributions and corresponding source are available from the [JAHDesk fork releases](https://github.com/Akiwane/moonlight-qt/releases). See the [modification and license notice](Docs/许可与修改声明.md) and the [license text](LICENSE).
+
 [Moonlight PC](https://moonlight-stream.org) is an open source PC client for NVIDIA GameStream and [Sunshine](https://github.com/LizardByte/Sunshine).
 
 Moonlight also has mobile versions for [Android](https://github.com/moonlight-stream/moonlight-android) and [iOS](https://github.com/moonlight-stream/moonlight-ios).

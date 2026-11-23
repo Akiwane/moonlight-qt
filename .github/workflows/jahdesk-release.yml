@@ -41,6 +41,7 @@ jobs:
           bash scripts/git-archive-all.sh --format tar.gz release/Moonlight-JAHDesk-source.tar.gz
           tar -tzf release/Moonlight-JAHDesk-source.tar.gz > "$RUNNER_TEMP/jahdesk-source-files"
           grep -Ex '(\./)?LICENSE' "$RUNNER_TEMP/jahdesk-source-files"
+          grep -Fx 'Docs/许可与修改声明.md' "$RUNNER_TEMP/jahdesk-source-files"
           grep -Ex '(\./)?app/streaming/jahdesk_toolbar_mac\.mm' "$RUNNER_TEMP/jahdesk-source-files"
           grep -Ex '(\./)?app/streaming/jahdesk_toolbar_win\.cpp' "$RUNNER_TEMP/jahdesk-source-files"
           grep -Ex '(\./)?moonlight-common-c/moonlight-common-c/src/Limelight\.h' "$RUNNER_TEMP/jahdesk-source-files"
@@ -88,11 +89,17 @@ jobs:
           lipo "$binary" -verify_arch x86_64 arm64
           macdeployqt "$app" -qmldir="$GITHUB_WORKSPACE/app/gui" -appstore-compliant
           rm -f "$app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib"
+          mkdir -p "$app/Contents/Resources"
+          cp LICENSE "$app/Contents/Resources/LICENSE.txt"
+          cp 'Docs/许可与修改声明.md' "$app/Contents/Resources/Moonlight-JAHDesk-NOTICE.md"
           codesign --force --deep --sign - "$app"
           codesign --verify --strict --deep "$app"
           ditto -c -k --keepParent "$app" release/Moonlight-JAHDesk-macos-universal.zip
           ditto -x -k release/Moonlight-JAHDesk-macos-universal.zip "$RUNNER_TEMP/jahdesk-unpacked"
           codesign --verify --strict --deep "$RUNNER_TEMP/jahdesk-unpacked/Moonlight.app"
+          resources="$RUNNER_TEMP/jahdesk-unpacked/Moonlight.app/Contents/Resources"
+          cmp LICENSE "$resources/LICENSE.txt"
+          cmp 'Docs/许可与修改声明.md' "$resources/Moonlight-JAHDesk-NOTICE.md"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: macos-universal
@@ -137,6 +144,13 @@ jobs:
           New-Item -ItemType Directory -Path release -Force | Out-Null
           $archive = 'release/Moonlight-JAHDesk-windows-x64.zip'
           Copy-Item "build/installer-x64-release/MoonlightPortable-x64-${env:CI_VERSION}.zip" "$archive"
+          $zip = [IO.Compression.ZipFile]::Open((Resolve-Path $archive).Path, 'Update')
+          try {
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Resolve-Path 'LICENSE').Path, 'LICENSE.txt') | Out-Null
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Resolve-Path 'Docs/许可与修改声明.md').Path, 'Moonlight-JAHDesk-NOTICE.md') | Out-Null
+          } finally {
+            $zip.Dispose()
+          }
           $unpacked = Join-Path $env:RUNNER_TEMP 'jahdesk-unpacked'
           Expand-Archive -Path "$archive" -DestinationPath "$unpacked"
           $binary = Join-Path $unpacked 'Moonlight.exe'
@@ -150,7 +164,7 @@ jobs:
               [BitConverter]::ToUInt16($exe, $offset + 4) -ne 0x8664) {
             throw 'Moonlight.exe is not an AMD64 PE'
           }
-          foreach ($required in @('Qt6Core.dll', 'Qt6Quick.dll', 'platforms/qwindows.dll')) {
+          foreach ($required in @('Qt6Core.dll', 'Qt6Quick.dll', 'platforms/qwindows.dll', 'LICENSE.txt', 'Moonlight-JAHDesk-NOTICE.md')) {
             if (!(Test-Path -LiteralPath (Join-Path $unpacked $required))) {
               throw "Windows ZIP is missing $required"
             }
@@ -223,4 +237,4 @@ jobs:
             release/Moonlight-JAHDesk-release.json \
             --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
             --title "Moonlight for JAHDesk $GITHUB_REF_NAME" \
-            --notes "Moonlight Qt with JAHDesk stream controls. Corresponding GPL source and the SHA-256 manifest are included. Source commit: $SOURCE_COMMIT."
+            --notes "Moonlight Qt with JAHDesk stream controls under GPL-3.0-or-later. This release includes the license and modification notice in both platform packages, the corresponding source, and a SHA-256 manifest. Source commit: $SOURCE_COMMIT."
