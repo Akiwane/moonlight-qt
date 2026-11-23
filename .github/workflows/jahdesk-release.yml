@@ -87,6 +87,7 @@ jobs:
           binary="$app/Contents/MacOS/Moonlight"
           lipo "$binary" -verify_arch x86_64 arm64
           macdeployqt "$app" -qmldir="$GITHUB_WORKSPACE/app/gui" -appstore-compliant
+          rm -f "$app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib"
           codesign --force --deep --sign - "$app"
           codesign --verify --strict --deep "$app"
           ditto -c -k --keepParent "$app" release/Moonlight-JAHDesk-macos-universal.zip
