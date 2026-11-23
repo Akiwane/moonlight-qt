@@ -85,7 +85,7 @@ jobs:
           )
           app=build/jahdesk/app/Moonlight.app
           binary="$app/Contents/MacOS/Moonlight"
-          lipo -verify_arch x86_64 arm64 "$binary"
+          lipo "$binary" -verify_arch x86_64 arm64
           macdeployqt "$app" -qmldir="$GITHUB_WORKSPACE/app/gui" -appstore-compliant
           codesign --force --deep --sign - "$app"
           codesign --verify --strict --deep "$app"
@@ -113,7 +113,6 @@ jobs:
         with:
           version: 6.12.0
           arch: win64_msvc2022_64
-          tools: tools_qtcreator_gui
           aqtsource: git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e
       - name: Prepare pinned Windows dependencies
         shell: pwsh
@@ -126,6 +125,8 @@ jobs:
           }
           Expand-Archive -Path "$archive" -DestinationPath 'libs/windows'
       - name: Build native Windows x64 portable Moonlight
+        env:
+          JAHDESK_PORTABLE_ONLY: '1'
         shell: pwsh
         run: |
           if ((qmake -query QT_VERSION) -ne '6.12.0') { throw 'Unexpected Qt version' }
