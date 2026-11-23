@@ -1,4 +1,8 @@
 #include "session.h"
+#ifdef JAHDESK_NATIVE_CONTROLS
+#include "jahdesk_control.h"
+#include "jahdesk_toolbar.h"
+#endif
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
@@ -1878,6 +1882,32 @@ void Session::exec()
 
     m_InputHandler->setWindow(m_Window);
 
+#ifdef JAHDESK_NATIVE_CONTROLS
+    const bool useJahdeskControls = JAHDeskControl::enabled() && !m_IsFullScreen;
+    const Uint32 jahdeskEvent = useJahdeskControls ? SDL_RegisterEvents(1) : Uint32(-1);
+    const bool jahdeskToolbarAttached = jahdeskEvent != Uint32(-1) &&
+        JAHDeskToolbar::attach(m_Window, jahdeskEvent, m_InputHandler->usesAbsoluteMouse(),
+                               m_InputHandler->showsLocalCursor(), m_StreamConfig.width, m_StreamConfig.height);
+    bool jahdeskAbsolute = m_InputHandler->usesAbsoluteMouse();
+    bool jahdeskCursor = m_InputHandler->showsLocalCursor();
+    if (jahdeskToolbarAttached) {
+        SDL_SetWindowTitle(m_Window, "JAHDesk");
+    }
+    const auto syncJahdeskInput = [&]() {
+        if (!jahdeskToolbarAttached) {
+            return;
+        }
+        const bool absolute = m_InputHandler->usesAbsoluteMouse();
+        const bool cursor = m_InputHandler->showsLocalCursor();
+        if (absolute != jahdeskAbsolute || cursor != jahdeskCursor) {
+            jahdeskAbsolute = absolute;
+            jahdeskCursor = cursor;
+            JAHDeskToolbar::update(m_Window, absolute, cursor, m_StreamConfig.width, m_StreamConfig.height);
+            JAHDeskControl::save(true, absolute, cursor);
+        }
+    };
+#endif
+
     QSvgRenderer svgIconRenderer(QString(":/res/moonlight.svg"));
     QImage svgImage(ICON_SIZE, ICON_SIZE, QImage::Format_RGBA8888);
     svgImage.fill(0);
@@ -1992,6 +2022,56 @@ void Session::exec()
             SDL_Delay(10);
 #endif
             presence.runCallbacks();
+            continue;
+        }
+#endif
+#ifdef JAHDESK_NATIVE_CONTROLS
+        if (jahdeskToolbarAttached && event.type == jahdeskEvent &&
+            event.user.windowID == SDL_GetWindowID(m_Window)) {
+            switch (static_cast<JAHDeskToolbar::Action>(event.user.code)) {
+            case JAHDeskToolbar::Action::Disconnect:
+                goto DispatchDeferredCleanup;
+            case JAHDeskToolbar::Action::ToggleMouseMode:
+                m_InputHandler->toggleJahdeskMouseMode();
+                syncJahdeskInput();
+                break;
+            case JAHDeskToolbar::Action::ToggleLocalCursor:
+                m_InputHandler->toggleJahdeskLocalCursor();
+                syncJahdeskInput();
+                break;
+            case JAHDeskToolbar::Action::OpenResolution: {
+                const bool captured = m_InputHandler->isCaptureActive();
+                m_InputHandler->raiseAllKeys();
+                m_InputHandler->setCaptureActive(false);
+                int width = m_StreamConfig.width;
+                int height = m_StreamConfig.height;
+                const bool accepted = JAHDeskToolbar::promptResolution(m_Window, width, height);
+                // The native dialog may pump SDL while collecting text. Its input
+                // belongs to the local UI and must never reach the stream host.
+                SDL_PumpEvents();
+                SDL_FlushEvents(SDL_KEYDOWN, SDL_TEXTINPUT);
+                SDL_FlushEvents(SDL_MOUSEMOTION, SDL_MOUSEWHEEL);
+                if (accepted && JAHDeskToolbar::validResolution(width, height) &&
+                    (width != m_StreamConfig.width || height != m_StreamConfig.height) &&
+                    JAHDeskControl::save(true, jahdeskAbsolute, jahdeskCursor, width, height)) {
+                    goto DispatchDeferredCleanup;
+                }
+                if (captured && jahdeskAbsolute) {
+                    m_InputHandler->setCaptureActive(true);
+                }
+                break;
+            }
+            case JAHDeskToolbar::Action::SetResolution: {
+                const auto width = static_cast<int>(reinterpret_cast<uintptr_t>(event.user.data1));
+                const auto height = static_cast<int>(reinterpret_cast<uintptr_t>(event.user.data2));
+                if (JAHDeskToolbar::validResolution(width, height) &&
+                    (width != m_StreamConfig.width || height != m_StreamConfig.height) &&
+                    JAHDeskControl::save(true, jahdeskAbsolute, jahdeskCursor, width, height)) {
+                    goto DispatchDeferredCleanup;
+                }
+                break;
+            }
+            }
             continue;
         }
 #endif
@@ -2232,6 +2312,11 @@ void Session::exec()
                 }
             }
 
+#ifdef JAHDESK_NATIVE_CONTROLS
+            if (jahdeskToolbarAttached) {
+                JAHDeskControl::save(true, jahdeskAbsolute, jahdeskCursor);
+            }
+#endif
             // Request an IDR frame to complete the reset
             LiRequestIdrFrame();
 
@@ -2249,6 +2334,9 @@ void Session::exec()
         case SDL_KEYDOWN:
             presence.runCallbacks();
             m_InputHandler->handleKeyEvent(&event.key);
+#ifdef JAHDESK_NATIVE_CONTROLS
+            syncJahdeskInput();
+#endif
             break;
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
@@ -2364,6 +2452,11 @@ DispatchDeferredCleanup:
 
     // This must be called after the decoder is deleted, because
     // the renderer may want to interact with the window
+#ifdef JAHDESK_NATIVE_CONTROLS
+    if (jahdeskToolbarAttached) {
+        JAHDeskToolbar::detach(m_Window);
+    }
+#endif
     SDL_DestroyWindow(m_Window);
 
     if (iconSurface != nullptr) {

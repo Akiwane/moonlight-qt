@@ -4,6 +4,9 @@
 #include "settings/mappingmanager.h"
 #include "path.h"
 #include "utils.h"
+#ifdef JAHDESK_NATIVE_CONTROLS
+#include "../jahdesk_control.h"
+#endif
 
 #include <QtGlobal>
 #include <QDir>
@@ -22,7 +25,11 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_FakeMouseCaptureActive(false),
       m_KeyboardCaptureActive(false),
       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
+#ifdef JAHDESK_NATIVE_CONTROLS
+      m_MouseCursorCapturedVisibilityState(JAHDeskControl::enabled() && JAHDeskControl::showLocalCursor() ? SDL_ENABLE : SDL_DISABLE),
+#else
       m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
+#endif
       m_LongPressTimer(0),
       m_StreamWidth(streamWidth),
       m_StreamHeight(streamHeight),
@@ -265,6 +272,28 @@ SdlInputHandler::~SdlInputHandler()
 #endif
 }
 
+#ifdef JAHDESK_NATIVE_CONTROLS
+// Switch modes without capturing the pointer while it is still on the settings bar.
+void SdlInputHandler::toggleJahdeskMouseMode()
+{
+    raiseAllKeys();
+    setCaptureActive(false);
+    m_AbsoluteMouseMode = !m_AbsoluteMouseMode;
+    if (m_AbsoluteMouseMode) {
+        setCaptureActive(true);
+    }
+}
+
+// Keep the pointer visible outside the video when toggling it from the settings bar.
+void SdlInputHandler::toggleJahdeskLocalCursor()
+{
+    if (m_AbsoluteMouseMode) {
+        m_MouseCursorCapturedVisibilityState = showsLocalCursor() ? SDL_DISABLE : SDL_ENABLE;
+        SDL_ShowCursor(m_MouseWasInVideoRegion ? m_MouseCursorCapturedVisibilityState : SDL_ENABLE);
+    }
+}
+#endif
+
 void SdlInputHandler::setWindow(SDL_Window *window)
 {
     m_Window = window;
@@ -356,7 +385,12 @@ void SdlInputHandler::setCaptureActive(bool active)
         // If we're in relative mode, try to activate SDL's relative mouse mode
         if (m_AbsoluteMouseMode || SDL_SetRelativeMouseMode(SDL_TRUE) < 0) {
             // Relative mouse mode didn't work or was disabled, so we'll just hide the cursor
+#ifdef JAHDESK_NATIVE_CONTROLS
+            SDL_ShowCursor(JAHDeskControl::enabled() && !m_AbsoluteMouseMode
+                               ? SDL_DISABLE : m_MouseCursorCapturedVisibilityState);
+#else
             SDL_ShowCursor(m_MouseCursorCapturedVisibilityState);
+#endif
             m_FakeMouseCaptureActive = true;
         }
 

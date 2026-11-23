@@ -90,6 +90,13 @@ public:
 
     void setWindow(SDL_Window* window);
 
+#ifdef JAHDESK_NATIVE_CONTROLS
+    bool usesAbsoluteMouse() const { return m_AbsoluteMouseMode; }
+    bool showsLocalCursor() const { return m_MouseCursorCapturedVisibilityState == SDL_ENABLE; }
+    void toggleJahdeskMouseMode();
+    void toggleJahdeskLocalCursor();
+#endif
+
     void handleKeyEvent(SDL_KeyboardEvent* event);
 
     void handleMouseButtonEvent(SDL_MouseButtonEvent* event);

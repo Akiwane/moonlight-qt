@@ -1,0 +1,224 @@
+name: JAHDesk Moonlight release
+
+on:
+  push:
+    tags:
+      - 'v6.2.0-jahdesk.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jahdesk-moonlight-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: github.repository == 'Akiwane/moonlight-qt' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v6.2.0-jahdesk.')
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.pin.outputs.commit }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Validate release tag and sources
+        id: pin
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v6\.2\.0-jahdesk\.[1-9][0-9]*$ ]]
+          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" = "$(git rev-parse HEAD)"
+          mismatch="$(git submodule status --recursive | grep '^[+U-]' || true)"
+          test -z "$mismatch"
+          git diff-index --quiet HEAD --
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Archive matching GPL source and submodules
+        shell: bash
+        run: |
+          mkdir -p release
+          bash scripts/git-archive-all.sh --format tar.gz release/Moonlight-JAHDesk-source.tar.gz
+          tar -tzf release/Moonlight-JAHDesk-source.tar.gz > "$RUNNER_TEMP/jahdesk-source-files"
+          grep -Ex '(\./)?LICENSE' "$RUNNER_TEMP/jahdesk-source-files"
+          grep -Ex '(\./)?app/streaming/jahdesk_toolbar_mac\.mm' "$RUNNER_TEMP/jahdesk-source-files"
+          grep -Ex '(\./)?app/streaming/jahdesk_toolbar_win\.cpp' "$RUNNER_TEMP/jahdesk-source-files"
+          grep -Ex '(\./)?moonlight-common-c/moonlight-common-c/src/Limelight\.h' "$RUNNER_TEMP/jahdesk-source-files"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: source
+          path: release/Moonlight-JAHDesk-source.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  macos:
+    needs: source
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: 6.11.2
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e
+      - name: Prepare pinned macOS dependencies
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/macOS-universal.zip"
+          curl --fail --silent --show-error --location --retry 3 --output "$archive" https://github.com/moonlight-stream/moonlight-qt-deps/releases/download/v19/macOS-universal.zip
+          echo "39fab7c95f5d513a6eb3bb19c66f1ae66bbf41dfe4118f82fabe3b46cc502d17  $archive" | shasum -a 256 -c -
+          mkdir -p libs/mac
+          unzip -q "$archive" -d libs/mac
+      - name: Build and package universal Moonlight
+        shell: bash
+        run: |
+          test "$(qmake -query QT_VERSION)" = 6.11.2
+          mkdir -p build/jahdesk release
+          (
+            cd build/jahdesk
+            qmake "$GITHUB_WORKSPACE/moonlight-qt.pro" QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64"
+            make -j"$(sysctl -n hw.logicalcpu)" release
+          )
+          app=build/jahdesk/app/Moonlight.app
+          binary="$app/Contents/MacOS/Moonlight"
+          lipo -verify_arch x86_64 arm64 "$binary"
+          macdeployqt "$app" -qmldir="$GITHUB_WORKSPACE/app/gui" -appstore-compliant
+          codesign --force --deep --sign - "$app"
+          codesign --verify --strict --deep "$app"
+          ditto -c -k --keepParent "$app" release/Moonlight-JAHDesk-macos-universal.zip
+          ditto -x -k release/Moonlight-JAHDesk-macos-universal.zip "$RUNNER_TEMP/jahdesk-unpacked"
+          codesign --verify --strict --deep "$RUNNER_TEMP/jahdesk-unpacked/Moonlight.app"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: macos-universal
+          path: release/Moonlight-JAHDesk-macos-universal.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    needs: source
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: 6.12.0
+          arch: win64_msvc2022_64
+          tools: tools_qtcreator_gui
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e
+      - name: Prepare pinned Windows dependencies
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'Windows-x64.zip'
+          curl.exe --fail --silent --show-error --location --retry 3 --output "$archive" https://github.com/moonlight-stream/moonlight-qt-deps/releases/download/v19/Windows-x64.zip
+          if ($LASTEXITCODE -ne 0) { throw 'Windows dependency download failed' }
+          if ((Get-FileHash "$archive" -Algorithm SHA256).Hash -ne '65ff1bd439222e1e2750054f960dcd6fac46190027da16db7403e345c295f10f') {
+            throw 'Windows dependency SHA-256 mismatch'
+          }
+          Expand-Archive -Path "$archive" -DestinationPath 'libs/windows'
+      - name: Build native Windows x64 portable Moonlight
+        shell: pwsh
+        run: |
+          if ((qmake -query QT_VERSION) -ne '6.12.0') { throw 'Unexpected Qt version' }
+          $env:CI_VERSION = $env:GITHUB_REF_NAME
+          cmd.exe /d /c scripts\build-arch.bat release x64
+          if ($LASTEXITCODE -ne 0) { throw 'Moonlight release compilation failed' }
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          $archive = 'release/Moonlight-JAHDesk-windows-x64.zip'
+          Copy-Item "build/installer-x64-release/MoonlightPortable-x64-${env:CI_VERSION}.zip" "$archive"
+          $unpacked = Join-Path $env:RUNNER_TEMP 'jahdesk-unpacked'
+          Expand-Archive -Path "$archive" -DestinationPath "$unpacked"
+          $binary = Join-Path $unpacked 'Moonlight.exe'
+          $exe = [IO.File]::ReadAllBytes($binary)
+          if ($exe.Length -lt 64 -or [BitConverter]::ToUInt16($exe, 0) -ne 0x5A4D) {
+            throw 'Moonlight.exe lacks a DOS header'
+          }
+          $offset = [BitConverter]::ToInt32($exe, 0x3c)
+          if ($offset -lt 64 -or $offset -gt ($exe.Length - 6) -or
+              [BitConverter]::ToUInt32($exe, $offset) -ne 0x00004550 -or
+              [BitConverter]::ToUInt16($exe, $offset + 4) -ne 0x8664) {
+            throw 'Moonlight.exe is not an AMD64 PE'
+          }
+          foreach ($required in @('Qt6Core.dll', 'Qt6Quick.dll', 'platforms/qwindows.dll')) {
+            if (!(Test-Path -LiteralPath (Join-Path $unpacked $required))) {
+              throw "Windows ZIP is missing $required"
+            }
+          }
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-x64
+          path: release/Moonlight-JAHDesk-windows-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: [source, macos, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: release
+          merge-multiple: true
+      - name: Create version and checksum manifest
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path('release')
+          names = (
+              'Moonlight-JAHDesk-macos-universal.zip',
+              'Moonlight-JAHDesk-windows-x64.zip',
+              'Moonlight-JAHDesk-source.tar.gz',
+          )
+          commit = os.environ['SOURCE_COMMIT']
+          if not re.fullmatch('[0-9a-f]{40}', commit):
+              raise SystemExit('Invalid source commit')
+          if not re.fullmatch(r'v6\.2\.0-jahdesk\.[1-9][0-9]*', os.environ['GITHUB_REF_NAME']):
+              raise SystemExit('Invalid release tag')
+          if {item.name for item in root.iterdir()} != set(names):
+              raise SystemExit('Unexpected release artifact set')
+          assets = {}
+          for name in names:
+              with (root / name).open('rb') as package:
+                  assets[name] = hashlib.file_digest(package, 'sha256').hexdigest()
+          manifest = {
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'tag': os.environ['GITHUB_REF_NAME'],
+              'commit': commit,
+              'assets': assets,
+          }
+          (root / 'Moonlight-JAHDesk-release.json').write_text(
+              json.dumps(manifest, indent=2) + '\n', encoding='utf-8'
+          )
+          PY
+      - name: Publish Moonlight runtime and matching source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/Moonlight-JAHDesk-macos-universal.zip \
+            release/Moonlight-JAHDesk-windows-x64.zip \
+            release/Moonlight-JAHDesk-source.tar.gz \
+            release/Moonlight-JAHDesk-release.json \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+            --title "Moonlight for JAHDesk $GITHUB_REF_NAME" \
+            --notes "Moonlight Qt with JAHDesk stream controls. Corresponding GPL source and the SHA-256 manifest are included. Source commit: $SOURCE_COMMIT."

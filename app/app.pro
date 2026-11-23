@@ -24,6 +24,18 @@ include(../globaldefs.pri)
 
 TEMPLATE = app
 
+macx {
+    SOURCES += streaming/jahdesk_toolbar_mac.mm
+    DEFINES += JAHDESK_NATIVE_CONTROLS
+    LIBS += -framework AppKit
+}
+win32 {
+    SOURCES += streaming/jahdesk_toolbar_win.cpp
+    DEFINES += JAHDESK_NATIVE_CONTROLS
+    win32-msvc: QMAKE_CXXFLAGS += /utf-8
+    LIBS += comctl32.lib
+}
+
 # The following define makes your compiler emit warnings if you use
 # any feature of Qt which has been marked as deprecated (the exact warnings
 # depend on your compiler). Please consult the documentation of the
